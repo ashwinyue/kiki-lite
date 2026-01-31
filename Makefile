@@ -5,7 +5,6 @@
 .PHONY: docker-up docker-down docker-logs docker-clean
 .PHONY: backend-install backend-run backend-test backend-lint backend-shell backend-format
 .PHONY: db-shell redis-shell test clean
-.PHONY: obs-up obs-down obs-logs obs-status kibana prometheus grafana
 
 # 默认目标: 显示帮助
 help:
@@ -39,15 +38,6 @@ help:
 	@echo "  其他:"
 	@echo "    make test          - 运行所有测试"
 	@echo "    make clean         - 清理所有"
-	@echo ""
-	@echo "  可观测性:"
-	@echo "    make obs-up        - 启动可观测性服务 (ELK + Prometheus + Grafana)"
-	@echo "    make obs-down      - 停止可观测性服务"
-	@echo "    make obs-logs      - 查看可观测性服务日志"
-	@echo "    make obs-status    - 查看可观测性服务状态"
-	@echo "    make kibana        - 打开 Kibana (http://localhost:5601)"
-	@echo "    make prometheus    - 打开 Prometheus (http://localhost:9090)"
-	@echo "    make grafana       - 打开 Grafana (http://localhost:3000)"
 
 # ========== 依赖服务 (Docker) ==========
 
@@ -167,75 +157,3 @@ dev: kill-port-8000 dev-deps
 	uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 # ========== 其他 ==========
-
-# 运行所有测试
-test:
-	uv run pytest tests/ -v
-
-# 清理所有
-clean: docker-clean
-	@echo "清理本地缓存..."
-	rm -rf .venv uv.lock
-	@echo "✓ 清理完成"
-
-# ========== 可观测性 ==========
-
-# 启动可观测性服务栈
-obs-up:
-	@echo "启动可观测性服务栈..."
-	docker-compose -f docker-compose.observability.yml up -d
-	@echo "等待服务启动..."
-	@sleep 10
-	@echo "✓ 可观测性服务已启动:"
-	@echo "  Elasticsearch: http://localhost:9200"
-	@echo "  Kibana:        http://localhost:5601"
-	@echo "  Prometheus:    http://localhost:9090"
-	@echo "  Grafana:       http://localhost:3000 (admin/admin)"
-	@echo "  Alertmanager:  http://localhost:9093"
-
-# 停止可观测性服务
-obs-down:
-	docker-compose -f docker-compose.observability.yml down
-	@echo "✓ 可观测性服务已停止"
-
-# 查看可观测性服务日志
-obs-logs:
-	docker-compose -f docker-compose.observability.yml logs -f
-
-# 查看可观测性服务状态
-obs-status:
-	@echo "可观测性服务状态:"
-	@docker-compose -f docker-compose.observability.yml ps
-
-# 打开 Kibana
-kibana:
-	@echo "正在打开 Kibana..."
-	@if command -v open >/dev/null 2>&1; then \
-		open http://localhost:5601; \
-	elif command -v xdg-open >/dev/null 2>&1; then \
-		xdg-open http://localhost:5601; \
-	else \
-		echo "请手动打开: http://localhost:5601"; \
-	fi
-
-# 打开 Prometheus
-prometheus:
-	@echo "正在打开 Prometheus..."
-	@if command -v open >/dev/null 2>&1; then \
-		open http://localhost:9090; \
-	elif command -v xdg-open >/dev/null 2>&1; then \
-		xdg-open http://localhost:9090; \
-	else \
-		echo "请手动打开: http://localhost:9090"; \
-	fi
-
-# 打开 Grafana
-grafana:
-	@echo "正在打开 Grafana..."
-	@if command -v open >/dev/null 2>&1; then \
-		open http://localhost:3000; \
-	elif command -v xdg-open >/dev/null 2>&1; then \
-		xdg-open http://localhost:3000; \
-	else \
-		echo "请手动打开: http://localhost:3000 (admin/admin)"; \
-	fi

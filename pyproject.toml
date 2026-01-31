@@ -33,7 +33,6 @@ dependencies = [
     # Observability
     "structlog>=25.1.0",
     "langfuse>=2.50.0",
-    "prometheus-client>=0.21.0",
     # Auth
     "python-jose[cryptography]>=3.4.0",
     "passlib[bcrypt]>=1.7.4",

@@ -5,7 +5,7 @@
 ## 特性
 
 - **LangGraph 集成**: 开箱即用的 Agent 工作流编排
-- **生产就绪**: 认证、授权、可观测性完整支持
+- **生产就绪**: 认证、授权支持
 - **模块化架构**: 清晰的分层设计，易于扩展
 - **类型安全**: 完整的类型注解，支持 mypy 检查
 
@@ -41,8 +41,6 @@ kiki/
 │   ├── utils/         # 工具函数
 │   └── main.py        # 应用入口
 ├── tests/             # 测试
-├── prometheus/        # Prometheus 配置
-├── grafana/           # Grafana 仪表板
 └── docker-compose.yml # 开发环境
 ```
 
@@ -52,7 +50,6 @@ kiki/
 - [API 文档](docs/api.md) - API 参考
 - [开发指南](docs/development.md) - 开发规范
 - [路线图](docs/ROADMAP.md) - 版本规划和后续功能
-- [可观测性增强](docs/OBSERVABILITY_GUIDE.md) - ELK、Prometheus、限流、缓存
 
 ## 许可证
 

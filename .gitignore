@@ -82,10 +82,6 @@ celerybeat.pid
 *.seed
 *.pid.lock
 
-# Prometheus/Grafana data
-prometheus/data/
-grafana/data/
-
 # Temporary files
 tmp/
 temp/

@@ -71,7 +71,6 @@ pgvector>=0.3.0  # 向量搜索支持
 
 # Observability
 structlog>=25.1.0
-prometheus-client>=0.21.0
 
 # Auth
 python-jose[cryptography]>=3.4.0

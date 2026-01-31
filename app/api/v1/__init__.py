@@ -2,27 +2,12 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import (
-    agents,
-    api_keys,
-    auth,
-    chat,
-    mcp_services,
-    messages,
-    sessions,
-    tenants,
-)
+from app.api.v1 import chat, sessions, messages
 
 router = APIRouter()
 
-# 注册子路由
 router.include_router(chat.router)
-router.include_router(auth.router)
-router.include_router(api_keys.router)
-router.include_router(agents.router)
 router.include_router(sessions.router)
 router.include_router(messages.router)
-router.include_router(tenants.router)
-router.include_router(mcp_services.router)
 
 __all__ = ["router"]

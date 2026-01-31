@@ -10,10 +10,6 @@
 - app/models/memory.py - 长期记忆相关
 """
 
-# ============== 重新导出各模型 ==============
-
-# 用户
-# Token
 from datetime import datetime
 
 from sqlmodel import SQLModel
@@ -41,18 +37,6 @@ from app.models.session import (
     SessionCreate,
     SessionPublic,
     SessionUpdate,
-)
-
-# 任务
-from app.models.task import (
-    Task,
-    TaskCreate,
-    TaskList,
-    TaskLog,
-    TaskLogCreate,
-    TaskLogPublic,
-    TaskPublic,
-    TaskUpdate,
 )
 
 # 租户
@@ -129,15 +113,6 @@ __all__ = [
     "MemoryCreate",
     "MemoryUpdate",
     "MemoryPublic",
-    # 任务
-    "Task",
-    "TaskCreate",
-    "TaskUpdate",
-    "TaskPublic",
-    "TaskList",
-    "TaskLog",
-    "TaskLogCreate",
-    "TaskLogPublic",
     # Token
     "Token",
     "TokenPayload",

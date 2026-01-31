@@ -1,424 +1,89 @@
-"""聊天 API 路由
+"""聊天 API"""
 
-提供聊天接口，支持同步和流式响应（SSE）。
-遵循 LangGraph streaming 最佳实践。
-"""
+from typing import Annotated
 
-from __future__ import annotations
-
-from collections.abc import AsyncIterator
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from starlette.requests import Request as StarletteRequest
+from pydantic import BaseModel
 
-from app.agent import get_agent
-from app.agent.memory.context import get_context_manager
-from app.agent.message_utils import extract_ai_content
-from app.agent.state import create_state_from_input
+from app.agent.agent import AgentManager
+from app.agent.tools import list_tools
 from app.config.settings import get_settings
-from app.middleware import TenantIdDep
-from app.observability.logging import get_logger
-from app.schemas.chat import (
-    ChatHistoryResponse,
-    ChatRequest,
-    ChatResponse,
-    Message,
-    SSEEvent,
-    StreamChatRequest,
-    WebsearchConfig,
-)
-from app.services.session_service import resolve_effective_user_id
-
-logger = get_logger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
-# ============== 辅助函数 ==============
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str
+    stream: bool = False
 
 
-async def _validate_session_access(
-    session_id: str,
-    user_id: str | None,
-    tenant_id: int | None,
-) -> None:
-    """验证会话访问权限
-
-    Args:
-        session_id: 会话 ID
-        user_id: 用户 ID
-        tenant_id: 租户 ID
-
-    Raises:
-        HTTPException: 会话不存在或无权访问
-    """
-    from app.infra.database import session_scope
-    from app.services.session_service import SessionService
-
-    async with session_scope() as db_session:
-        service = SessionService(db_session)
-        await service.validate_session_access(
-            session_id,
-            user_id=int(user_id) if user_id else None,
-            tenant_id=tenant_id,
-        )
+class ChatResponse(BaseModel):
+    response: str
+    session_id: str
 
 
-def _prepare_websearch_config(
-    websearch: WebsearchConfig | None,
-) -> dict[str, str | int] | None:
-    """准备 Web 搜索配置
-
-    Args:
-        websearch: Web 搜索配置
-
-    Returns:
-        配置字典或 None
-    """
-    if websearch and websearch.enable:
-        return {
-            "provider": websearch.provider,
-            "search_depth": websearch.search_depth,
-            "max_results": websearch.max_results,
-        }
-    return None
-
-
-# ============== Chat Endpoints ==============
-
-
-@router.post("", response_model=ChatResponse)
-@limiter.limit(RateLimit.CHAT)
+@router.post("")
 async def chat(
     request: ChatRequest,
-    http_request: StarletteRequest,
-    tenant_id: TenantIdDep = None,
+    llm_service: "LLMService" = Depends(lambda: get_llm_service()),
 ) -> ChatResponse:
-    """聊天接口（非流式）
+    """发送消息并获取响应（同步）"""
+    from app.llm import get_llm_service
 
-    Args:
-        request: 聊天请求
+    llm_service = get_llm_service()
+    model = llm_service.get_model()
+    tools = list_tools()
+    agent = AgentManager(model=model, tools=tools)
 
-    Returns:
-        ChatResponse: 聊天响应
-    """
-    try:
-        state_user_id = getattr(http_request.state, "user_id", None)
-        effective_user_id = resolve_effective_user_id(request.user_id, state_user_id)
+    response = await agent.chat_sync(
+        message=request.message,
+        session_id=request.session_id,
+    )
 
-        await _validate_session_access(
-            session_id=request.session_id,
-            user_id=effective_user_id,
-            tenant_id=tenant_id,
-        )
-        agent = await get_agent()
-
-        # 准备 websearch 配置
-        websearch_config = _prepare_websearch_config(request.websearch)
-        if websearch_config:
-            logger.info(
-                "websearch_enabled",
-                provider=websearch_config["provider"],
-                search_depth=websearch_config["search_depth"],
-            )
-
-        messages = await agent.get_response(
-            message=request.message,
-            session_id=request.session_id,
-            user_id=effective_user_id,
-            tenant_id=tenant_id,
-            websearch_config=websearch_config,
-        )
-
-        # 获取最后一条 AI 消息
-        content = extract_ai_content(messages)
-
-        return ChatResponse(content=content, session_id=request.session_id)
-
-    except Exception as e:
-        logger.exception("chat_request_failed", session_id=request.session_id)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    return ChatResponse(response=response, session_id=request.session_id)
 
 
 @router.post("/stream")
-@limiter.limit(RateLimit.CHAT_STREAM)
-async def chat_stream(
-    request: StreamChatRequest,
-    http_request: StarletteRequest,
-    tenant_id: TenantIdDep = None,
-) -> StreamingResponse:
-    """流式聊天接口（SSE）
+async def stream_chat(request: ChatRequest):
+    """发送消息并获取响应（流式）"""
+    from app.llm import get_llm_service
 
-    遵循 LangGraph streaming 最佳实践：
-    - 使用 Agent 层统一处理（包含 checkpointer、中间件、追踪）
-    - 支持 stream_mode="messages" 获取令牌级流式输出
-    - 返回 (message_chunk, metadata) 元组
-    - 支持多种流式模式
+    llm_service = get_llm_service()
+    model = llm_service.get_model()
+    tools = list_tools()
+    agent = AgentManager(model=model, tools=tools)
 
-    Args:
-        request: 聊天请求
-
-    Returns:
-        StreamingResponse: SSE 流式响应
-    """
-    state_user_id = getattr(http_request.state, "user_id", None)
-    effective_user_id = resolve_effective_user_id(request.user_id, state_user_id)
-
-    await _validate_session_access(
-        session_id=request.session_id,
-        user_id=effective_user_id,
-        tenant_id=tenant_id,
-    )
-
-    # 准备 websearch 配置
-    websearch_config = _prepare_websearch_config(request.websearch)
-    if websearch_config:
-        logger.info(
-            "websearch_enabled",
-            provider=websearch_config["provider"],
-            search_depth=websearch_config["search_depth"],
-        )
-
-    async def event_generator() -> AsyncIterator[str]:
-        """生成 SSE 事件流"""
-        try:
-            agent = await get_agent()
-            graph = await agent.get_compiled_graph()
-
-            # 准备输入
-            input_data = create_state_from_input(
-                input_text=request.message,
-                user_id=effective_user_id,
-                session_id=request.session_id,
-            )
-
-            # 添加 websearch 配置到输入数据
-            if websearch_config:
-                if hasattr(input_data, "websearch_config"):
-                    input_data.websearch_config = websearch_config
-                else:
-                    input_data["websearch_config"] = websearch_config
-
-            # 准备配置
-            from langgraph.types import RunnableConfig
-
-            callbacks = []
-            try:
-                from app.agent.callbacks import KikiCallbackHandler
-
-                settings = get_settings()
-                callbacks.append(
-                    KikiCallbackHandler(
-                        session_id=request.session_id,
-                        user_id=effective_user_id,
-                        enable_langfuse=settings.langfuse_enabled,
-                        enable_metrics=True,
-                    )
-                )
-            except Exception:
-                pass
-
-            # 构建 metadata（包含 websearch 配置）
-            metadata = {
-                "user_id": effective_user_id,
-                "session_id": request.session_id,
-                "tenant_id": tenant_id,
-            }
-            if websearch_config:
-                metadata["websearch"] = websearch_config
-
-            config = RunnableConfig(
-                configurable={"thread_id": request.session_id},
-                metadata=metadata,
-                callbacks=callbacks or None,
-            )
-
-            logger.info(
-                "sse_stream_start",
-                session_id=request.session_id,
-                stream_mode=request.stream_mode,
-            )
-
-            # 根据流式模式选择不同的处理方式
-            if request.stream_mode == "messages":
-                # 令牌级流式输出 (最佳实践)
-                token_buffer: list[str] = []
-                async for chunk, metadata in graph.astream(
-                    input_data,
-                    config,
-                    stream_mode="messages",
-                ):
-                    if hasattr(chunk, "content") and chunk.content:
-                        token_buffer.append(chunk.content)
-                        event = SSEEvent(
-                            event="token",
-                            data={
-                                "content": chunk.content,
-                                "session_id": request.session_id,
-                                "metadata": {
-                                    "langgraph_node": metadata.get("langgraph_node"),
-                                    "run_id": metadata.get("run_id"),
-                                },
-                            },
-                        )
-                        yield event.format()
-
-                # 写入上下文存储（不影响主流程）
-                if token_buffer:
-                    await agent.persist_interaction(
-                        request.session_id,
-                        request.message,
-                        "".join(token_buffer),
-                    )
-
-            elif request.stream_mode == "updates":
-                # 状态更新流式输出
-                async for chunk in graph.astream(
-                    input_data,
-                    config,
-                    stream_mode="updates",
-                ):
-                    event = SSEEvent(
-                        event="update",
-                        data={
-                            "update": chunk,
-                            "session_id": request.session_id,
-                        },
-                    )
-                    yield event.format()
-
-            elif request.stream_mode == "values":
-                # 完整状态流式输出
-                async for chunk in graph.astream(
-                    input_data,
-                    config,
-                    stream_mode="values",
-                ):
-                    event = SSEEvent(
-                        event="state",
-                        data={
-                            "state": chunk,
-                            "session_id": request.session_id,
-                        },
-                    )
-                    yield event.format()
-
-            # 发送完成事件
-            done_event = SSEEvent(
-                event="done",
-                data={
-                    "session_id": request.session_id,
-                    "done": True,
-                },
-            )
-            yield done_event.format()
-
-            logger.info("sse_stream_complete", session_id=request.session_id)
-
-        except Exception as e:
-            logger.exception("sse_stream_failed", session_id=request.session_id)
-            error_event = SSEEvent(
-                event="error",
-                data={
-                    "error": str(e),
-                    "session_id": request.session_id,
-                    "done": True,
-                },
-            )
-            yield error_event.format()
+    async def generate():
+        async for chunk in agent.chat(
+            message=request.message,
+            session_id=request.session_id,
+        ):
+            yield chunk
 
     return StreamingResponse(
-        event_generator(),
+        generate(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # 禁用 Nginx 缓冲
-        },
+        headers={"Cache-Control": "no-cache"},
     )
 
 
-# ============== History & Context Endpoints ==============
+@router.get("/history/{session_id}")
+async def get_chat_history(session_id: str) -> dict:
+    """获取聊天历史"""
+    from app.agent.memory import get_memory_manager
+
+    manager = get_memory_manager()
+    messages = await manager.get_messages(session_id)
+
+    return {"messages": messages, "session_id": session_id}
 
 
-@router.get("/history/{session_id}", response_model=ChatHistoryResponse)
-@limiter.limit(RateLimit.API)
-async def get_chat_history(
-    request: StarletteRequest,
-    session_id: str,
-    tenant_id: TenantIdDep = None,
-) -> ChatHistoryResponse:
-    """获取聊天历史
-
-    Args:
-        session_id: 会话 ID
-
-    Returns:
-        ChatHistoryResponse: 聊天历史
-    """
-    try:
-        request_user_id = getattr(request.state, "user_id", None)
-        await _validate_session_access(
-            session_id=session_id,
-            user_id=str(request_user_id) if request_user_id is not None else None,
-            tenant_id=tenant_id,
-        )
-        agent = await get_agent()
-
-        messages = await agent.get_chat_history(session_id)
-
-        # 转换为响应格式
-        history_messages = []
-        for msg in messages:
-            if msg.type in ("human", "ai", "system"):
-                role_map = {"human": "user", "ai": "assistant", "system": "system"}
-                history_messages.append(
-                    Message(
-                        role=role_map.get(msg.type, msg.type),
-                        content=str(msg.content),
-                    )
-                )
-
-        return ChatHistoryResponse(messages=history_messages, session_id=session_id)
-
-    except Exception as e:
-        logger.exception("get_chat_history_failed", session_id=session_id)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+# 延迟导入避免循环依赖
+def get_llm_service():
+    from app.llm import get_llm_service as _get
+    return _get()
 
 
-@router.delete("/history/{session_id}")
-@limiter.limit(RateLimit.API)
-async def clear_chat_history(
-    session_id: str,
-    request: StarletteRequest,
-    tenant_id: TenantIdDep = None,
-) -> dict[str, str]:
-    """清除聊天历史
-
-    Args:
-        session_id: 会话 ID
-        request: FastAPI 请求对象
-
-    Returns:
-        操作结果
-    """
-    try:
-        request_user_id = getattr(request.state, "user_id", None)
-        await _validate_session_access(
-            session_id=session_id,
-            user_id=str(request_user_id) if request_user_id is not None else None,
-            tenant_id=tenant_id,
-        )
-        agent = await get_agent()
-        await agent.clear_chat_history(session_id)
-
-        # 同时清除 Redis 上下文
-        context_manager = get_context_manager()
-        await context_manager.clear_context(session_id)
-
-        return {"status": "success", "message": "聊天历史已清除"}
-
-    except Exception as e:
-        logger.exception("clear_chat_history_failed", session_id=session_id)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+__all__ = ["router"]

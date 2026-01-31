@@ -14,9 +14,6 @@ __all__ = [
     # API Key 管理
     "ApiKeyManagementService",
     "get_api_key_management_service",
-    # MCP 服务
-    "McpServiceService",
-    "get_mcp_service",
     # 流式响应服务
     "StreamContinuationService",
     "get_stream_continuation_service",
@@ -65,18 +62,6 @@ def __getattr__(name: str):
         if name == "ApiKeyManagementService":
             return ApiKeyManagementService
         return get_api_key_management_service
-
-    # McpServiceService
-    if name == "McpServiceService" or name == "get_mcp_service":
-        from app.services.agent.mcp_service import (
-            McpServiceService,
-        )
-        from app.services.agent.mcp_service import (
-            get_mcp_service as get_mcp_service_func,
-        )
-        if name == "McpServiceService":
-            return McpServiceService
-        return get_mcp_service_func
 
     # StreamContinuationService
     if name == "StreamContinuationService" or name == "get_stream_continuation_service":
